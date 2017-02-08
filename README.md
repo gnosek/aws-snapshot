@@ -1,13 +1,15 @@
-# AWS EC2 Snapshot cleaner
+# AWS Snapshot tools
+
+## AWS EBS Snapshot cleaner
 
 Deletes all snapshots with 'Backup:Expires' tag older than now.
 
-# Build
+### Build
 To create a deployment package.
 
 	./build.sh
 
-# Install
+### Install
 
 To install:
 
@@ -16,7 +18,7 @@ To install:
 * Deploy cloudformation.yaml
 * Tag instances
 
-# Permissions
+### Permissions
 Required role permissions:
 
 	{
