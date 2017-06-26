@@ -83,28 +83,12 @@ def get_args():
         """
     )
     parser.add_argument(
-        '-t',
-        '--ttl',
-        dest='ttl',
-        default='32 days',
-        help=
-        """
-        The time that the snapshot should stick around. The following are valid:
-        1s,
-        1 second(s),
-        5M,
-        5 minute(s),
-        1H,
-        2 hour(s),
-        1d,
-        2 day(s),
-        1w,
-        1 week(s),
-        2m,
-        2 months(s),
-        1y,
-        2 year(s),
-        """
+        '-k',
+        '--keep',
+        dest='keep',
+        action='store_true',
+        default=False,
+        help="Flag the backup to be kept (Backup:Retain)"
     )
     parser.add_argument(
         '-w',
@@ -126,87 +110,6 @@ def get_args():
 
 def get_numeric_loglevel(loglevel):
     return getattr(logging, loglevel.upper())
-
-def validate_period(period):
-    valid_names = [ 's',
-                    'second',
-                    'seconds',
-                    'M',
-                    'minute',
-                    'minutes',
-                    'H',
-                    'hour',
-                    'hours',
-                    'd',
-                    'day',
-                    'days',
-                    'w',
-                    'week',
-                    'weeks',
-                    'm',
-                    'month',
-                    'months',
-                    'y',
-                    'year',
-                    'years',
-                  ]
-
-    for name in valid_names:
-      if len(period) > 1:
-        if name.lower() == period.lower():
-          return
-      else:
-        if name == period:
-          return
-
-    logging.error("Invalid time unit specified: %s" % period)
-    sys.exit(1)
-
-def normalize_period(period):
-    normal_period = {
-      's' : 'seconds',
-      'second' : 'seconds',
-      'seconds' : 'seconds',
-      'M' : 'minutes',
-      'minute' : 'minutes',
-      'minutes' : 'minutes',
-      'H' : 'hours',
-      'hour' : 'hours',
-      'hours' : 'hours',
-      'd' : 'days',
-      'day' : 'days',
-      'days' : 'days',
-      'w' : 'weeks',
-      'week' : 'weeks',
-      'weeks' : 'weeks',
-      'm' : 'months',
-      'month' : 'months',
-      'months' : 'months',
-      'y' : 'years',
-      'year' : 'years',
-      'years' : 'years',
-    }
-
-    if len(period) > 1:
-      return normal_period[period.lower()]
-    else:
-      return normal_period[period]
-
-def convert_ttl(ttl):
-    r = re.compile('(\d+)\s*(.*)')
-    m = r.match(ttl)
-
-    num = m.group(1)
-    period = m.group(2)
-
-    validate_period(period)
-    period = normalize_period(period)
-
-    ttl = { period : int(num) }
-    now = datetime.datetime.now()
-    expiration = now + relativedelta(**ttl)
-
-    return expiration
 
 def convert_to_utf8(string):
   return string.encode('utf8')
@@ -241,27 +144,26 @@ def get_volumes_attached_to_instance(conn, instance):
 
     return volumes
 
-def get_meta_data(conn, volume, name, ttl):
+def get_meta_data(conn, volume, name):
   dev = volume.attach_data.device
 
   if dev is None:
     dev = 'Unattached'
 
-  ttl = ttl.isoformat()
   desc = "%s-snap-%s-%s" % (name, volume.id, dev)
 
-  return name, volume.id, dev, ttl, desc
+  return name, volume.id, dev, desc
 
 def create_snapshot(conn, volume, desc):
   logging.info("Creating snapshot for %s with description %s" % (repr(volume), desc))
   return volume.create_snapshot(description=desc)
 
-def create_tags(conn, snapshot, volume, name, dev, ttl):
+def create_tags(conn, snapshot, volume, name, dev, retain):
   logging.info("Creating tag Backup:Device=%s" % dev)
-  logging.info("Creating tag Backup:Expires=%s" % ttl)
-
   snapshot.add_tag('Backup:Device', value=dev)
-  snapshot.add_tag('Backup:Expires', value=ttl)
+  if retain:
+      logging.info("Creating tag Backup:Retain=%s" % retain)
+      snapshot.add_tag('Backup:Expires', value=retain)
   for n,v in volume.tags.items():
     if n.startswith('aws:'):
       logging.info("Creating tag Backup:%s=%s" % (n,v))
@@ -283,14 +185,12 @@ def run():
     numeric_level = get_numeric_loglevel(args.loglevel)
     logging.basicConfig(format='%(asctime)s:%(levelname)s:%(message)s', level=numeric_level)
     conn = get_conn(args)
-    ttl = convert_ttl(args.ttl)
-    logging.debug("Expiration determined to be: %s" % ttl.isoformat())
 
     if args.subparser_name == 'instance':
       instance = get_instance(conn, args.instanceid)
       volumes = get_volumes_attached_to_instance(conn, instance)
       for volume in volumes:
-        name, id, dev, expire, desc = get_meta_data(conn, volume, args.name, ttl)
+        name, id, dev, expire, desc = get_meta_data(conn, volume, args.name)
         snapshot = create_snapshot(conn, volume, desc)
         logging.info("%s" % repr(snapshot))
         create_tags(conn, snapshot, volume, name, dev, expire)
@@ -305,18 +205,18 @@ def run():
         logging.error("No volume attached to device %s on instance %s" % (args.device, args.instanceid))
         sys.exit(1)
 
-      name, id, dev, expire, desc = get_meta_data(conn, volume, args.name, ttl)
+      name, id, dev, desc = get_meta_data(conn, volume, args.name)
       snapshot = create_snapshot(conn, volume, desc)
       logging.info("%s" % repr(snapshot))
-      create_tags(conn, snapshot, volume, name, dev, expire)
+      create_tags(conn, snapshot, volume, name, dev, args.keep)
       if args.wait: wait_for_snapshot(snapshot)
 
     if args.subparser_name == 'volume':
       volume = get_volume(conn, args.volumeid)
-      name, id, dev, expire, desc = get_meta_data(conn, volume, args.name, ttl)
+      name, id, dev, desc = get_meta_data(conn, volume, args.name)
       snapshot = create_snapshot(conn, volume, desc)
       logging.info("%s" % repr(snapshot))
-      create_tags(conn, snapshot, volume, name, dev, expire)
+      create_tags(conn, snapshot, volume, name, dev, args.keep)
       if args.wait: wait_for_snapshot(snapshot)
 
     sys.exit()
