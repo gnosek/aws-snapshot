@@ -167,9 +167,13 @@ def get_snapshots(conn):
 def purge_snapshots(snapshots, expires, simulate=False):
     logging.info("Looking for snapshots older than %s" % (expires))
     for snapshot in snapshots:
-        if get_tag('Backup:Retain', snapshot.tags):
-            logging.info("Backup:Retain set for %s %s...skipping" % (snapshot.id, snapshot.description))
-            next
+        retain_tag = get_tag('Backup:Retain', snapshot.tags)
+        if retain_tag:
+            if retain_tag.lower() in ['true', 'yes']:
+                logging.info("Backup:Retain set to '%s' for %s %s...skipping" % (retain_tag, snapshot.id, snapshot.description))
+                next
+            else:
+                logging.info("Backup:Retain set to '%s' for %s %s... assuming false" % (retain_tag, snapshot.id, snapshot.description))
 
         if snapshot.start_time < expires:
             # do someting
