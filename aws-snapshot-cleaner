@@ -3,9 +3,30 @@
 
 import boto3
 import argparse
-import time, sys, logging, datetime
+import logging
+import re
+import sys
+import time
 
-TAG_KEY='Backup:Expires'
+from datetime import datetime, timedelta, tzinfo
+from dateutil.relativedelta import relativedelta
+
+try:
+    from datetime import timezone
+    utc = timezone.utc
+except ImportError:
+    # py2.x support
+    class UTC(tzinfo):
+        def utcoffset(self, dt):
+            return timedelta(0)
+        def tzname(self, dt):
+            return "UTC"
+        def dst(self, dt):
+            return timedelta(0)
+utc = UTC()
+
+TAG_KEY='Business:Application'
+TAG_VALUE='my-app'
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -25,20 +46,115 @@ def get_args():
         default=False,
         help='Dry run. Do everything but deleting snapshots',
     )
+    parser.add_argument(
+        '-t',
+        '--ttl',
+        dest='ttl',
+        default='32 days',
+        help=
+        """
+        The time that the snapshot should stick around. The following are valid:
+        1s,
+        1 second(s),
+        5M,
+        5 minute(s),
+        1H,
+        2 hour(s),
+        1d,
+        2 day(s),
+        1w,
+        1 week(s),
+        2m,
+        2 months(s),
+        1y,
+        2 year(s),
+        """
+    )
     return parser.parse_args()
 
 def get_numeric_loglevel(loglevel):
     return getattr(logging, loglevel.upper())
 
-def convert_iso_to_datetime(string):
-    return datetime.datetime.strptime(string, "%Y-%m-%dT%H:%M:%S.%f")
+def validate_period(period):
+    valid_names = [ 's',
+                    'second',
+                    'seconds',
+                    'M',
+                    'minute',
+                    'minutes',
+                    'H',
+                    'hour',
+                    'hours',
+                    'd',
+                    'day',
+                    'days',
+                    'w',
+                    'week',
+                    'weeks',
+                    'm',
+                    'month',
+                    'months',
+                    'y',
+                    'year',
+                    'years',
+                  ]
 
-def expired(current_time, expires_time):
-    delta = expires_time - current_time
-    if delta.total_seconds() > 0:
-        return False
+    for name in valid_names:
+      if len(period) > 1:
+        if name.lower() == period.lower():
+          return
+      else:
+        if name == period:
+          return
+
+    logging.error("Invalid time unit specified: %s" % period)
+    sys.exit(1)
+
+def normalize_period(period):
+    normal_period = {
+      's' : 'seconds',
+      'second' : 'seconds',
+      'seconds' : 'seconds',
+      'M' : 'minutes',
+      'minute' : 'minutes',
+      'minutes' : 'minutes',
+      'H' : 'hours',
+      'hour' : 'hours',
+      'hours' : 'hours',
+      'd' : 'days',
+      'day' : 'days',
+      'days' : 'days',
+      'w' : 'weeks',
+      'week' : 'weeks',
+      'weeks' : 'weeks',
+      'm' : 'months',
+      'month' : 'months',
+      'months' : 'months',
+      'y' : 'years',
+      'year' : 'years',
+      'years' : 'years',
+    }
+
+    if len(period) > 1:
+      return normal_period[period.lower()]
     else:
-        return True
+      return normal_period[period]
+
+def convert_ttl(ttl):
+    r = re.compile('(\d+)\s*(.*)')
+    m = r.match(ttl)
+
+    num = m.group(1)
+    period = m.group(2)
+
+    validate_period(period)
+    period = normalize_period(period)
+
+    ttl = { period : int(num) }
+    now = datetime.now(utc)
+    expiration = now - relativedelta(**ttl)
+
+    return expiration
 
 def get_tag(tag_key, tags={}):
     for tag in tags:
@@ -46,35 +162,33 @@ def get_tag(tag_key, tags={}):
             return tag['Value']
 
 def get_snapshots(conn):
-    return conn.snapshots.filter(OwnerIds=['self'], Filters=[{'Name':'tag-key', 'Values': [TAG_KEY]}])
+    return conn.snapshots.filter(OwnerIds=['self'], Filters=[{'Name':'tag:'+TAG_KEY, 'Values': [TAG_VALUE]}])
 
-def purge_snapshots(snapshots, simulate=False):
+def purge_snapshots(snapshots, expires, simulate=False):
+    logging.info("Looking for snapshots older than %s" % (expires))
     for snapshot in snapshots:
-        now = datetime.datetime.now()
-        iso_time = get_tag(TAG_KEY, snapshot.tags)
-        if iso_time:
-            expires = convert_iso_to_datetime(iso_time)
-            if expired(now, expires):
-                # do someting
-                logging.info("Purging expired snapshot %s %s" % (snapshot.id, iso_time))
-                if simulate:
-                    logging.info("DRY RUN")
-                else:
-                    if snapshot.delete():
-                        logging.info("SUCCESS")
-                    else:
-                        logging.info("FAILURE")
-            else:
-                logging.debug("%s not expired yet: %s" % (snapshot.id, iso_time))
-        else:
-            logging.debug("No Backup:Expires for %s %s...skipping" % (snapshot.id, snapshot.description))
+        if get_tag('Backup:Retain', snapshot.tags):
+            logging.info("Backup:Retain set for %s %s...skipping" % (snapshot.id, snapshot.description))
             next
 
-def run(loglevel=logging.INFO, dryrun=False):
+        if snapshot.start_time < expires:
+            # do someting
+            logging.info("Purging snapshot %s, started %s, expired %s" % (snapshot.id, snapshot.start_time, expires))
+            if simulate:
+                logging.info("DRY RUN")
+            else:
+                if snapshot.delete():
+                    logging.info("SUCCESS")
+                else:
+                    logging.info("FAILURE")
+        else:
+            logging.debug("snapshot %s, started %s has not yet expired" % (snapshot.id, snapshot.start_time))
+
+def run(expires, loglevel=logging.INFO, dryrun=False):
     logging.basicConfig(format='%(asctime)s:%(levelname)s:%(message)s', level=loglevel)
     conn = boto3.resource('ec2')
     snapshots = get_snapshots(conn)
-    purge_snapshots(snapshots, dryrun)
+    purge_snapshots(snapshots, expires, dryrun)
 
 def lambda_handler(event, context):
     run()
@@ -82,7 +196,8 @@ def lambda_handler(event, context):
 def main():
     args = get_args()
     numeric_level = get_numeric_loglevel(args.loglevel)
-    run(numeric_level, args.dryrun)
+    expires = convert_ttl(args.ttl)
+    run(expires, numeric_level, args.dryrun)
 
 if __name__ == '__main__':
     main()
