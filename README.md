@@ -2,7 +2,7 @@
 
 ## AWS EBS Snapshot cleaner
 
-Deletes all snapshots with 'Backup:Expires' tag older than now.
+Deletes all snapshots with older than specified TTL, exluding any with tag 'Backup:Retain'.
 
 ### Build
 To create a deployment package.
