@@ -1,0 +1,33 @@
+production:
+  host: mongos.example.com
+  port: 27017
+  #username: [auth username] (default: none)
+  #password: [auth password] (default: none)
+  #authdb: [auth database]   (default: admin)
+  #authmech: [auth mechanism] (default: SCRAM-SHA-1)
+  username: 'CN=backup,OU=user,O=example'
+  authmech: '$external'
+  authmech: 'MONGODB-X509'
+  ssl: true
+  ssl_certfile: /etc/mongodb/backup.pem
+  ssl_ca_certs: /etc/mongodb/ca.pem
+  #ssl:          [true|false]             (default: false)
+  #ssl_certfile: [ssl auth identity cert] (default: none)
+  #ssl_keyfile:  [ssl auth identity priv] (default: none)
+  #ssl_ca_certs: [ssl auth CA file]       (default: none)
+  #log_dir: /var/log/mongodb-snapshot
+  log_dir: ./log
+  backup:
+    method: snapshot
+    name: default
+  #  snapshot:
+  #    TODO: config options
+  #replication:
+  #  max_lag_secs: [1+]        (default: 5)
+  #  min_priority: [0-999]     (default: 0)
+  #  max_priority: [2-1000]    (default: 1000)
+  #  hidden_only: [true|false] (default: false)
+  #sharding:
+  #  balancer:
+  #    wait_secs: [1+] (default: 300)
+  #    ping_secs: [1+] (default: 3)

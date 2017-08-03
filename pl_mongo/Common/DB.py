@@ -12,9 +12,15 @@ from pl_mongo.Errors import DBAuthenticationError, DBConnectionError, DBOperatio
 class DB:
     def __init__(self, uri, config, do_replset=False, read_pref='primaryPreferred', do_connect=True, conn_timeout=5000, retries=5):
         self.uri          = uri
+        self.ssl          = config.ssl
+        self.ssl_certfile = config.ssl_certfile
+        self.ssl_keyfile  = config.ssl_keyfile
+        self.ssl_ca_certs = config.ssl_ca_certs
         self.username     = config.username
         self.password     = config.password
         self.authdb       = config.authdb
+        self.authmech     = config.authmech
+        # TODO: assert self.authmech in pymongo.auth.MECHANISMS
         self.do_replset   = do_replset
         self.read_pref    = read_pref
         self.do_connect   = do_connect
@@ -41,7 +47,11 @@ class DB:
                 connectTimeoutMS=self.conn_timeout,
                 serverSelectionTimeoutMS=self.conn_timeout,
                 maxPoolSize=1,
-                w="majority"
+                w="majority",
+                ssl=self.ssl,
+                ssl_certfile=self.ssl_certfile,
+                ssl_keyfile=self.ssl_keyfile,
+                ssl_ca_certs=self.ssl_ca_certs,
             )
             if self.do_connect:
                 conn['admin'].command({"ping":1})
@@ -53,10 +63,10 @@ class DB:
         return self._conn
 
     def auth_if_required(self):
-        if self.username is not None and self.password is not None:
+        if self.username is not None and (self.password is not None or self.authmech in ('GSSAPI', 'MONGODB-X509')):
             try:
                 logging.debug("Authenticating connection with username: %s" % self.username)
-                self._conn[self.authdb].authenticate(self.username, self.password)
+                self._conn[self.authdb].authenticate(self.username, self.password, mechanism=self.authmech)
             except OperationFailure, e:
                 logging.fatal("Unable to authenticate with host %s: %s" % (self.uri, e))
                 raise DBAuthenticationError(e)

@@ -1,3 +1,4 @@
+from Config import Config
 from DB import DB
 from Lock import Lock
 from MongoUri import MongoUri

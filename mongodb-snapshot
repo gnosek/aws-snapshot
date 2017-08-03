@@ -1,0 +1,252 @@
+#!/usr/bin/env python
+
+import logging
+import os
+import signal
+import sys
+import traceback
+
+from datetime import datetime
+from multiprocessing import current_process, Event, Manager
+
+# XXX: adds script dir to PYTHONPATH
+sys.path.append(os.path.dirname(__file__))
+
+from pl_mongo.Common import Config, DB, Lock, MongoUri, Timer
+from pl_mongo.Errors import Error, NotifyError, OperationError
+from pl_mongo.Logger import Logger
+from pl_mongo.Replication import Replset, ReplsetSharded
+from pl_mongo.Sharding import Sharding
+
+class MongodbSnapshotBackup(object):
+    def __init__(self, prog_name="mongodb-snapshot"):
+        self.program_name             = prog_name
+        self.backup                   = None
+        self.sharding                 = None
+        self.replset                  = None
+        self.replset_sharded          = None
+        self.lock                     = None
+        self.backup_stop              = Event()
+        self.uri                      = None
+        self.db                       = None
+        self.is_sharded               = False
+        self.log_level                = None
+        self.replsets                 = {}
+        self.backup_summary           = {}
+        self.manager                  = Manager()
+        self.timer                    = Timer(self.manager)
+        self.timer_name               = "%s.%s" % (self.program_name, self.__class__.__name__)
+        self.backup_time              = datetime.now().strftime("%Y%m%d_%H%M")
+        self.logger                   = None
+        self.current_log_file         = None
+        self.backup_log_file          = None
+        self.last_error_msg           = ''
+
+        try:
+            self.setup_config()
+            self.setup_logger()
+            self.setup_signal_handlers()
+            self.get_lock()
+            self.logger.update_symlink()
+            self.init()
+            self.get_db_conn()
+        except OperationError, e:
+            self.exception("Error setting up %s: %s" % (self.program_name, e), e)
+
+    def setup_logger(self):
+        try:
+            self.logger = Logger(self.config, self.backup_time)
+            self.logger.start()
+            self.logger.start_file_logger()
+        except Exception, e:
+            self.exception("Could not start logger: %s" % e, e)
+
+    def setup_config(self):
+        try:
+            self.config = Config()
+        except Exception, e:
+            print "Error setting up configuration: '%s'!" % e
+            sys.exit(1)
+
+    def init(self):
+        logging.info("Starting %s" % self.program_name)
+        logging.info("Loaded config: %s" % self.config)
+
+    def setup_signal_handlers(self):
+        try:
+            signal.signal(signal.SIGINT, self.cleanup_and_exit)
+            signal.signal(signal.SIGTERM, self.cleanup_and_exit)
+        except Exception, e:
+            logging.fatal("Cannot setup signal handlers, error: %s" % e)
+            sys.exit(1)
+
+    def cleanup_and_exit(self, code, frame):
+        submodules = ['replset', 'sharding', 'backup']
+        for submodule_name in submodules:
+            try:
+                submodule = getattr(self, submodule_name)
+                if submodule:
+                    submodule.close()
+            except:
+                continue
+
+        if self.manager:
+            self.manager.shutdown()
+        if self.db:
+            self.db.close()
+
+        logging.info("Cleanup complete, exiting")
+        self.release_lock()
+        sys.exit(1)
+
+    def get_lock(self):
+        try:
+            if not self.config.lock_file:
+                self.config.lock_file = '/tmp/%s.lock' % self.program_name
+            self.lock = Lock(self.config.lock_file)
+        except Exception:
+            logging.fatal("Could not acquire lock: '%s'! Is another %s process running? Exiting" % (self.config.lock_file, self.program_name))
+            sys.exit(1)
+
+    def release_lock(self):
+        if self.lock:
+            self.lock.release()
+
+    def start_timer(self):
+        self.timer.start(self.timer_name)
+
+    def stop_timer(self):
+        self.timer.stop(self.timer_name)
+
+    def get_db_conn(self):
+        self.uri = MongoUri(self.config.host, self.config.port)
+        try:
+            self.db = DB(self.uri, self.config, True, 'secondaryPreferred')
+        except OperationError, e:
+            return self.exception("Cannot connect to seed host(s): %s" % self.uri, e)
+
+        self.is_sharded = self.db.is_mongos()
+        if not self.is_sharded:
+            self.is_sharded = self.db.is_configsvr()
+        if not self.is_sharded and not self.db.is_replset() and not self.db.is_configsvr():
+            raise OperationError("Host %s is not part of a replset and is not a sharding config/mongos server!" % self.uri.get())
+
+    def exception(self, error_message, error):
+        self.last_error_msg = error_message
+        if isinstance(error, NotifyError):
+            logging.error(error_message)
+        else:
+            if isinstance(error, OperationError):
+                logging.fatal(error_message)
+            else:
+                logging.exception(error_message)
+            return self.cleanup_and_exit(None, None)
+
+    def run(self):
+        self.start_timer()
+
+        if not self.is_sharded:
+            logging.info("Running backup in replset mode using seed node(s): %s" % self.uri)
+
+            # get shard secondary
+            try:
+                self.replset = Replset(
+                    self.config,
+                    self.db
+                )
+                replset_name = self.replset.get_rs_name()
+                replset_dir  = os.path.join(self.backup_directory, replset_name)
+                self.replsets[replset_name] = self.replset
+            except Exception, e:
+                self.exception("Problem getting shard secondaries! Error: %s" % e, e)
+
+            # run backup
+            try:
+                self.backup = Backup(
+                    self.manager,
+                    self.config,
+                    self.timer,
+                    self.replsets
+                )
+                self.backup_summary = self.backup.run()
+            except Exception, e:
+                self.exception("Problem performing replset mongodump! Error: %s" % e, e)
+
+            # close master db connection:
+            if self.db:
+                self.db.close()
+
+        else:
+            logging.info("Running backup in sharding mode using seed node(s): %s" % self.uri)
+
+            # connect to balancer and stop it
+            try:
+                self.sharding = Sharding(
+                    self.config,
+                    self.timer,
+                    self.db
+                )
+                self.sharding.get_start_state()
+            except Exception, e:
+                self.exception("Problem connecting to the balancer! Error: %s" % e, e)
+
+            # get shard replsets
+            try:
+                self.replset_sharded = ReplsetSharded(
+                    self.config,
+                    self.sharding,
+                    self.db
+                )
+                self.replsets = self.replset_sharded.get_replsets()
+            except Exception, e:
+                self.exception("Problem getting shard/replica set info! Error: %s" % e, e)
+
+
+            # stop the balancer
+            try:
+                self.sharding.stop_balancer()
+            except Exception, e:
+                self.exception("Problem stopping the balancer! Error: %s" % e, e)
+
+
+            try:
+                # init the backup
+                self.backup = Backup(
+                    self.manager,
+                    self.config,
+                    self.timer,
+                    self.backup_root_subdirectory,
+                    self.backup_directory,
+                    self.replsets,
+                    self.backup_stop,
+                    self.sharding
+                )
+
+                # run the backup(s)
+                self.backup_summary = self.backup.run()
+            except Exception, e:
+                self.exception("Problem performing backup! Error: %s" % e, e)
+
+            # set balancer back to original value
+            try:
+                self.sharding.restore_balancer_state()
+                self.sharding.close()
+            except Exception, e:
+                self.exception("Problem restoring balancer lock! Error: %s" % e, e)
+
+            # close master db connection:
+            if self.db:
+                self.db.close()
+
+        self.stop_timer()
+        logging.info("Completed %s in %.2f sec" % (self.program_name, self.timer.duration(self.timer_name)))
+        self.release_lock()
+
+if __name__ == "__main__":
+    try:
+        m = MongodbSnapshotBackup()
+        m.run()
+    except Exception, e:
+        print "Backup failed: %s" % e
+        traceback.print_exc()
+        sys.exit(1)

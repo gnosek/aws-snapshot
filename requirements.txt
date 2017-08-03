@@ -1,2 +1,4 @@
 boto
+dateutil
 pymongo
+yconf
