@@ -190,10 +190,10 @@ def run():
       instance = get_instance(conn, args.instanceid)
       volumes = get_volumes_attached_to_instance(conn, instance)
       for volume in volumes:
-        name, id, dev, expire, desc = get_meta_data(conn, volume, args.name)
+        name, id, dev, desc = get_meta_data(conn, volume, args.name)
         snapshot = create_snapshot(conn, volume, desc)
         logging.info("%s" % repr(snapshot))
-        create_tags(conn, snapshot, volume, name, dev, expire)
+        create_tags(conn, snapshot, volume, name, dev, args.keep)
         if args.wait: wait_for_snapshot(snapshot)
 
     if args.subparser_name == 'device':
