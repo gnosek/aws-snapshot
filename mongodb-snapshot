@@ -17,6 +17,7 @@ from pl_mongo.Errors import Error, NotifyError, OperationError
 from pl_mongo.Logger import Logger
 from pl_mongo.Replication import Replset, ReplsetSharded
 from pl_mongo.Sharding import Sharding
+from pl_mongo.Backup import AwsSnapshot
 
 class MongodbSnapshotBackup(object):
     def __init__(self, prog_name="mongodb-snapshot"):
@@ -162,11 +163,12 @@ class MongodbSnapshotBackup(object):
 
             # run backup
             try:
-                self.backup = Backup(
+                self.backup = AwsSnapshot(
                     self.manager,
                     self.config,
                     self.timer,
-                    self.replsets
+                    self.replsets,
+                    self.backup_time
                 )
                 self.backup_summary = self.backup.run()
             except Exception, e:
@@ -201,6 +203,19 @@ class MongodbSnapshotBackup(object):
             except Exception, e:
                 self.exception("Problem getting shard/replica set info! Error: %s" % e, e)
 
+            # init the backup
+            try:
+                self.backup = AwsSnapshot(
+                    self.manager,
+                    self.config,
+                    self.timer,
+                    self.replsets,
+                    self.backup_time,
+                    self.backup_stop,
+                    self.sharding
+                )
+            except Exception, e:
+                self.exception("Problem initializing backup! Error: %s" % e, e)
 
             # stop the balancer
             try:
@@ -208,20 +223,7 @@ class MongodbSnapshotBackup(object):
             except Exception, e:
                 self.exception("Problem stopping the balancer! Error: %s" % e, e)
 
-
             try:
-                # init the backup
-                self.backup = Backup(
-                    self.manager,
-                    self.config,
-                    self.timer,
-                    self.backup_root_subdirectory,
-                    self.backup_directory,
-                    self.replsets,
-                    self.backup_stop,
-                    self.sharding
-                )
-
                 # run the backup(s)
                 self.backup_summary = self.backup.run()
             except Exception, e:

@@ -18,10 +18,12 @@ production:
   #log_dir: /var/log/mongodb-snapshot
   log_dir: ./log
   backup:
-    method: snapshot
+    method: awssnapshot
     name: default
-  #  snapshot:
-  #    TODO: config options
+  #aws:
+  #  region:     [aws region name]       (default: none)
+  #  access_key: [aws access key id]     (default: none)
+  #  secret_key: [aws secret access key] (default: none)
   #replication:
   #  max_lag_secs: [1+]        (default: 5)
   #  min_priority: [0-999]     (default: 0)
