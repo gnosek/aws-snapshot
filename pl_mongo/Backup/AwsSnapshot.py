@@ -33,6 +33,7 @@ class AwsSnapshotInstance(object):
         self.instance   = None
         self.volumes    = {}
         self.snapshots  = {}
+        self.snap_tags  = {}
 
         self.get_instance()
         self.get_volumes()
@@ -76,10 +77,22 @@ class AwsSnapshotInstance(object):
                 logging.warn("Unable to snapshot %s with tag %s: reserved namespace. Prefixing with %s instead." % (snapshot.id, tag_key, self.tag_prefix))
                 tag_key = self.tag_prefix + tag_key
 
-            logging.info("Adding snapshot %s tag %s=%s" % (snapshot.id, tag_key, tag_value))
-            snapshot.add_tag(tag_key, value=tag_value)
+            logging.debug("Adding snapshot %s tag %s=%s" % (snapshot.id, tag_key, tag_value))
+            try:
+                self.snap_tags[dev][tag_key] = tag_value
+            except KeyError:
+                self.snap_tags[dev] = { tag_key: tag_value }
         except KeyError:
             raise OperationError("No snapshot found for device %s" % dev)
+
+    def tag_snapshot(self, dev):
+        try:
+            snapshot = self.snapshots[dev]
+            tags = self.snap_tags[dev]
+            logging.info("Adding snapshot %s tags: %s" % (snapshot.id, ' '.join(["%s=%s" % (k,v) for k,v in tags.items()])))
+            self.boto_conn.create_tags([snapshot.id], tags)
+        except KeyError:
+            raise OperationError("No snapshot or tags found for device %s" % dev)
 
     def run(self):
         for dev, volume in self.volumes.items():
@@ -103,6 +116,8 @@ class AwsSnapshotInstance(object):
             self.add_snapshot_tag(dev, 'Time', self.backup_time)
             for tag_key, tag_value in volume.tags.items():
                 self.add_snapshot_tag(dev, tag_key, tag_value, prefix=False)
+
+            self.tag_snapshot(dev)
 
 
 class AwsSnapshot(Task):
