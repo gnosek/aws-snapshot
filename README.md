@@ -69,6 +69,34 @@ optional arguments:
                         The AWS InstanceId, e.g i-1223456
 ```
 
+### Permissions
+The minimum required permissions to execute depend on how the program is called, but the full set is:
+
+	{
+		"Version": "2012-10-17",
+		"Statement": [
+			{
+				"Effect": "Allow",
+				"Action": [
+					"ec2:DescribeInstances",
+					"ec2:DescribeSnapshots",
+					"ec2:DescribeVolumes",
+					"ec2:CreateSnapshot"
+				],
+				"Resource": [
+					"*"
+				]
+			},
+			{
+				"Effect": "Allow",
+				"Action": [
+					"ec2:CreateTags"
+				],
+				"Resource": "arn:aws:ec2:*::snapshot/*"
+			}
+		]
+	}
+
 ## AWS EBS Snapshot cleaner
 
 Deletes all snapshots with older than specified TTL, exluding any with tag 'Backup:Retain'.
