@@ -176,3 +176,16 @@ The mongodb backup user requires the following [mongodb roles](https://docs.mong
 ```
 { role: "clusterMonitor", db: "admin" }
 ```
+
+# Known issues
+## EC2 Instance lookup
+The mongodb-snapshot EC2 Instance lookup is based of a [DescribeInstances](http://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeInstances.html) filter on private-ip-address. In this lookup the current tooling makes the following assumptions:
+
+* The IP looked up is unique and will only result in a single instance returned
+    * Note: If more than one (or none) is recieved an error is thrown
+* The IP exists in the configured `aws.region` and calling AWS Account (ie: [GetCallerIdentity](http://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html).Account)
+
+The above assumptions may not hold for more complicated deployments eg:
+
+* mongodb clusters spanning multiple regions (ie: [Geographically Redundant Replica Sets](https://docs.mongodb.com/manual/tutorial/deploy-geographically-distributed-replica-set/)) or accounts
+* Accounts with multiple VPCs with overlapping CidrBlocks in the same region
