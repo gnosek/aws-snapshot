@@ -70,6 +70,16 @@ def get_args():
         2 year(s),
         """
     )
+    parser.add_argument(
+        '--tag-key',
+        dest='tag_key',
+        help='AWS tag key to filter on before cleaning. Can be combined with tag-value for key=value, otherwise independent'
+    )
+    parser.add_argument(
+        '--tag-value',
+        dest='tag_value',
+        help='AWS tag value to filter on before cleaning. Can be combined with tag-key for key=value, otherwise independent'
+    )
     return parser.parse_args()
 
 def get_numeric_loglevel(loglevel):
@@ -161,8 +171,17 @@ def get_tag(tag_key, tags={}):
         if tag['Key'] == tag_key:
             return tag['Value']
 
-def get_snapshots(conn):
-    return conn.snapshots.filter(OwnerIds=['self'], Filters=[{'Name':'tag:'+TAG_KEY, 'Values': [TAG_VALUE]}])
+def get_snapshots(conn, tag_key=None, tag_value=None):
+    if tag_key is not None and tag_value is not None:
+        filters = [ {'Name':'tag:'+tag_key, 'Values': [tag_value]} ]
+    elif tag_key is not None:
+        filters = [ {'Name':'tag-key', 'Values': [tag_key]} ]
+    elif tag_value is not None:
+        filters = [ {'Name':'tag-value', 'Values': [tag_value]} ]
+    else:
+        raise Exception("At least one of tag-key or tag-value must be provided")
+
+    return conn.snapshots.filter(OwnerIds=['self'], Filters=filters)
 
 def purge_snapshots(snapshots, expires, simulate=False):
     logging.info("Looking for snapshots older than %s" % (expires))
@@ -177,7 +196,7 @@ def purge_snapshots(snapshots, expires, simulate=False):
 
         if snapshot.start_time < expires:
             # do someting
-            logging.info("Purging snapshot %s, started %s, expired %s" % (snapshot.id, snapshot.start_time, expires))
+            logging.info("Purging snapshot %s, started %s, older than %s" % (snapshot.id, snapshot.start_time, expires))
             if simulate:
                 logging.info("DRY RUN")
             else:
@@ -188,10 +207,10 @@ def purge_snapshots(snapshots, expires, simulate=False):
         else:
             logging.debug("snapshot %s, started %s has not yet expired" % (snapshot.id, snapshot.start_time))
 
-def run(expires, loglevel=logging.INFO, dryrun=False):
+def run(expires, loglevel=logging.INFO, dryrun=False, tag_key=TAG_KEY, tag_value=TAG_VALUE):
     logging.basicConfig(format='%(asctime)s:%(levelname)s:%(message)s', level=loglevel)
     conn = boto3.resource('ec2')
-    snapshots = get_snapshots(conn)
+    snapshots = get_snapshots(conn, tag_key, tag_value)
     purge_snapshots(snapshots, expires, dryrun)
 
 def lambda_handler(event, context):
@@ -201,7 +220,7 @@ def main():
     args = get_args()
     numeric_level = get_numeric_loglevel(args.loglevel)
     expires = convert_ttl(args.ttl)
-    run(expires, numeric_level, args.dryrun)
+    run(expires, numeric_level, args.dryrun, args.tag_key, args.tag_value)
 
 if __name__ == '__main__':
     main()

@@ -105,7 +105,8 @@ Deletes all snapshots with older than specified TTL, exluding any with tag 'Back
 $ aws-snapshot-cleaner -h
 usage: aws-snapshot-cleaner [-h]
                             [-l {CRITICAL,FATAL,ERROR,WARN,WARNING,INFO,DEBUG,NOTSET}]
-                            [-n] [-t TTL]
+                            [-n] [-t TTL] [--tag-key TAG_KEY]
+                            [--tag-value TAG_VALUE]
 
 optional arguments:
   -h, --help            show this help message and exit
@@ -116,6 +117,13 @@ optional arguments:
                         following are valid: 1s, 1 second(s), 5M, 5 minute(s),
                         1H, 2 hour(s), 1d, 2 day(s), 1w, 1 week(s), 2m, 2
                         months(s), 1y, 2 year(s),
+  --tag-key TAG_KEY     AWS tag key to filter on before cleaning. Can be
+                        combined with tag-value for key=value, otherwise
+                        independent
+  --tag-value TAG_VALUE
+                        AWS tag value to filter on before cleaning. Can be
+                        combined with tag-key for key=value, otherwise
+                        independent
 ```
 
 ### Permissions
