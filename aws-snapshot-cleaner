@@ -7,6 +7,7 @@ import logging
 import re
 import sys
 import time
+import os
 
 from datetime import datetime, timedelta, tzinfo
 from dateutil.relativedelta import relativedelta
@@ -209,7 +210,7 @@ def purge_snapshots(snapshots, expires, simulate=False):
 
 def run(expires, loglevel=logging.INFO, dryrun=False, tag_key=TAG_KEY, tag_value=TAG_VALUE):
     logging.basicConfig(format='%(asctime)s:%(levelname)s:%(message)s', level=loglevel)
-    conn = boto3.resource('ec2')
+    conn = boto3.resource('ec2', region_name=os.environ.get('EC2_REGION'))
     snapshots = get_snapshots(conn, tag_key, tag_value)
     purge_snapshots(snapshots, expires, dryrun)
 
