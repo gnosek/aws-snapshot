@@ -1,33 +1,38 @@
 #!/usr/bin/env python
 # https://github.com/nbutler19/scripts/blob/master/python/snapshot-rotation.py
 
-import boto3
 import argparse
 import logging
+import os
 import re
 import sys
-import time
-import os
-
 from datetime import datetime, timedelta, tzinfo
+
+import boto3
 from dateutil.relativedelta import relativedelta
 
 try:
+    # noinspection PyUnresolvedReferences
     from datetime import timezone
+
     utc = timezone.utc
 except ImportError:
     # py2.x support
     class UTC(tzinfo):
         def utcoffset(self, dt):
             return timedelta(0)
+
         def tzname(self, dt):
             return "UTC"
+
         def dst(self, dt):
             return timedelta(0)
-utc = UTC()
 
-TAG_KEY='Business:Application'
-TAG_VALUE='my-app'
+    utc = UTC()
+
+TAG_KEY = 'Business:Application'
+TAG_VALUE = 'my-app'
+
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -36,7 +41,7 @@ def get_args():
         '--log',
         dest='loglevel',
         default='INFO',
-        choices=['CRITICAL','FATAL','ERROR','WARN','WARNING','INFO','DEBUG','NOTSET'],
+        choices=['CRITICAL', 'FATAL', 'ERROR', 'WARN', 'WARNING', 'INFO', 'DEBUG', 'NOTSET'],
         help='the loglevel sets the amount of output you want'
     )
     parser.add_argument(
@@ -52,8 +57,7 @@ def get_args():
         '--ttl',
         dest='ttl',
         default='32 days',
-        help=
-        """
+        help="""
         The time that the snapshot should stick around. The following are valid:
         1s,
         1 second(s),
@@ -74,85 +78,91 @@ def get_args():
     parser.add_argument(
         '--tag-key',
         dest='tag_key',
-        help='AWS tag key to filter on before cleaning. Can be combined with tag-value for key=value, otherwise independent'
+        help='AWS tag key to filter on before cleaning. ' +
+             'Can be combined with tag-value for key=value, otherwise independent'
     )
     parser.add_argument(
         '--tag-value',
         dest='tag_value',
-        help='AWS tag value to filter on before cleaning. Can be combined with tag-key for key=value, otherwise independent'
+        help='AWS tag value to filter on before cleaning. ' +
+             'Can be combined with tag-key for key=value, otherwise independent'
     )
     return parser.parse_args()
+
 
 def get_numeric_loglevel(loglevel):
     return getattr(logging, loglevel.upper())
 
+
 def validate_period(period):
-    valid_names = [ 's',
-                    'second',
-                    'seconds',
-                    'M',
-                    'minute',
-                    'minutes',
-                    'H',
-                    'hour',
-                    'hours',
-                    'd',
-                    'day',
-                    'days',
-                    'w',
-                    'week',
-                    'weeks',
-                    'm',
-                    'month',
-                    'months',
-                    'y',
-                    'year',
-                    'years',
-                  ]
+    valid_names = ['s',
+                   'second',
+                   'seconds',
+                   'M',
+                   'minute',
+                   'minutes',
+                   'H',
+                   'hour',
+                   'hours',
+                   'd',
+                   'day',
+                   'days',
+                   'w',
+                   'week',
+                   'weeks',
+                   'm',
+                   'month',
+                   'months',
+                   'y',
+                   'year',
+                   'years',
+                   ]
 
     for name in valid_names:
-      if len(period) > 1:
-        if name.lower() == period.lower():
-          return
-      else:
-        if name == period:
-          return
+        if len(period) > 1:
+            if name.lower() == period.lower():
+                return
+        else:
+            if name == period:
+                return
 
     logging.error("Invalid time unit specified: %s" % period)
     sys.exit(1)
 
+
 def normalize_period(period):
     normal_period = {
-      's' : 'seconds',
-      'second' : 'seconds',
-      'seconds' : 'seconds',
-      'M' : 'minutes',
-      'minute' : 'minutes',
-      'minutes' : 'minutes',
-      'H' : 'hours',
-      'hour' : 'hours',
-      'hours' : 'hours',
-      'd' : 'days',
-      'day' : 'days',
-      'days' : 'days',
-      'w' : 'weeks',
-      'week' : 'weeks',
-      'weeks' : 'weeks',
-      'm' : 'months',
-      'month' : 'months',
-      'months' : 'months',
-      'y' : 'years',
-      'year' : 'years',
-      'years' : 'years',
+        's': 'seconds',
+        'second': 'seconds',
+        'seconds': 'seconds',
+        'M': 'minutes',
+        'minute': 'minutes',
+        'minutes': 'minutes',
+        'H': 'hours',
+        'hour': 'hours',
+        'hours': 'hours',
+        'd': 'days',
+        'day': 'days',
+        'days': 'days',
+        'w': 'weeks',
+        'week': 'weeks',
+        'weeks': 'weeks',
+        'm': 'months',
+        'month': 'months',
+        'months': 'months',
+        'y': 'years',
+        'year': 'years',
+        'years': 'years',
     }
 
     if len(period) > 1:
-      return normal_period[period.lower()]
+        return normal_period[period.lower()]
     else:
-      return normal_period[period]
+        return normal_period[period]
+
 
 def convert_ttl(ttl):
-    r = re.compile('(\d+)\s*(.*)')
+    r = re.compile(r'(\d+)\s*(.*)')
     m = r.match(ttl)
 
     num = m.group(1)
@@ -161,39 +171,46 @@ def convert_ttl(ttl):
     validate_period(period)
     period = normalize_period(period)
 
-    ttl = { period : int(num) }
+    ttl = {period: int(num)}
     now = datetime.now(utc)
     expiration = now - relativedelta(**ttl)
 
     return expiration
 
-def get_tag(tag_key, tags={}):
+
+def get_tag(tag_key, tags=None):
+    if tags is None:
+        return
     for tag in tags:
         if tag['Key'] == tag_key:
             return tag['Value']
 
+
 def get_snapshots(conn, tag_key=None, tag_value=None):
     if tag_key is not None and tag_value is not None:
-        filters = [ {'Name':'tag:'+tag_key, 'Values': [tag_value]} ]
+        filters = [{'Name': 'tag:' + tag_key, 'Values': [tag_value]}]
     elif tag_key is not None:
-        filters = [ {'Name':'tag-key', 'Values': [tag_key]} ]
+        filters = [{'Name': 'tag-key', 'Values': [tag_key]}]
     elif tag_value is not None:
-        filters = [ {'Name':'tag-value', 'Values': [tag_value]} ]
+        filters = [{'Name': 'tag-value', 'Values': [tag_value]}]
     else:
         raise Exception("At least one of tag-key or tag-value must be provided")
 
     return conn.snapshots.filter(OwnerIds=['self'], Filters=filters)
 
+
 def purge_snapshots(snapshots, expires, simulate=False):
-    logging.info("Looking for snapshots older than %s" % (expires))
+    logging.info("Looking for snapshots older than %s" % expires)
     for snapshot in snapshots:
         retain_tag = get_tag('Backup:Retain', snapshot.tags)
         if retain_tag:
             if retain_tag.lower() in ['true', 'yes']:
-                logging.info("Backup:Retain set to '%s' for %s %s...skipping" % (retain_tag, snapshot.id, snapshot.description))
-                next
+                logging.info(
+                    "Backup:Retain set to '%s' for %s %s...skipping" % (retain_tag, snapshot.id, snapshot.description))
+                continue
             else:
-                logging.info("Backup:Retain set to '%s' for %s %s... assuming false" % (retain_tag, snapshot.id, snapshot.description))
+                logging.info("Backup:Retain set to '%s' for %s %s... assuming false" % (
+                    retain_tag, snapshot.id, snapshot.description))
 
         if snapshot.start_time < expires:
             # do someting
@@ -208,20 +225,20 @@ def purge_snapshots(snapshots, expires, simulate=False):
         else:
             logging.debug("snapshot %s, started %s has not yet expired" % (snapshot.id, snapshot.start_time))
 
+
 def run(expires, loglevel=logging.INFO, dryrun=False, tag_key=TAG_KEY, tag_value=TAG_VALUE):
     logging.basicConfig(format='%(asctime)s:%(levelname)s:%(message)s', level=loglevel)
     conn = boto3.resource('ec2', region_name=os.environ.get('EC2_REGION'))
     snapshots = get_snapshots(conn, tag_key, tag_value)
     purge_snapshots(snapshots, expires, dryrun)
 
-def lambda_handler(event, context):
-    run()
 
 def main():
     args = get_args()
     numeric_level = get_numeric_loglevel(args.loglevel)
     expires = convert_ttl(args.ttl)
     run(expires, numeric_level, args.dryrun, args.tag_key, args.tag_value)
+
 
 if __name__ == '__main__':
     main()
