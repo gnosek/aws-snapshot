@@ -191,6 +191,15 @@ def wait_for_snapshot(snapshot):
         time.sleep(1)
 
 
+def run_snapshot(args, volume):
+    name, volume_id, dev, desc = get_meta_data(volume, args.name)
+    snapshot = create_snapshot(volume, desc)
+    logging.info("%s" % repr(snapshot))
+    create_tags(snapshot, volume, dev, args.keep)
+    if args.wait:
+        wait_for_snapshot(snapshot)
+
+
 def run():
     (accesskey, secretkey) = get_creds()
     args = get_args()
@@ -204,12 +213,7 @@ def run():
         instance = get_instance(conn, args.instanceid)
         volumes = get_volumes_attached_to_instance(conn, instance)
         for volume in volumes:
-            name, volume_id, dev, desc = get_meta_data(volume, args.name)
-            snapshot = create_snapshot(volume, desc)
-            logging.info("%s" % repr(snapshot))
-            create_tags(snapshot, volume, dev, args.keep)
-            if args.wait:
-                wait_for_snapshot(snapshot)
+            run_snapshot(args, volume)
 
     if args.subparser_name == 'device':
         instance = get_instance(conn, args.instanceid)
@@ -220,21 +224,11 @@ def run():
             logging.error("No volume attached to device %s on instance %s" % (args.device, args.instanceid))
             sys.exit(1)
 
-        name, volume_id, dev, desc = get_meta_data(volume, args.name)
-        snapshot = create_snapshot(volume, desc)
-        logging.info("%s" % repr(snapshot))
-        create_tags(snapshot, volume, dev, args.keep)
-        if args.wait:
-            wait_for_snapshot(snapshot)
+        run_snapshot(args, volume)
 
     if args.subparser_name == 'volume':
         volume = get_volume(conn, args.volumeid)
-        name, volume_id, dev, desc = get_meta_data(volume, args.name)
-        snapshot = create_snapshot(volume, desc)
-        logging.info("%s" % repr(snapshot))
-        create_tags(snapshot, volume, dev, args.keep)
-        if args.wait:
-            wait_for_snapshot(snapshot)
+        run_snapshot(args, volume)
 
     sys.exit()
 
