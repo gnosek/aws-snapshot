@@ -68,6 +68,14 @@ def get_args():
         help='The AWS VolumeId, e.g. vol-1223456',
     )
     parser.add_argument(
+        '-n',
+        '--dry-run',
+        dest='dry_run',
+        action='store_true',
+        default=False,
+        help="Dry run (don't actually create the snapshot)"
+    )
+    parser.add_argument(
         '-r',
         '--region',
         dest='region',
@@ -75,7 +83,7 @@ def get_args():
         help='The AWS Region to use, e.g. us-east-1/us-west-2',
     )
     parser.add_argument(
-        '-n',
+        '-N',
         '--name',
         dest='name',
         default=socket.gethostname(),
@@ -91,6 +99,12 @@ def get_args():
         action='store_true',
         default=False,
         help="Flag the backup to be kept (Backup:Retain)"
+    )
+    parser.add_argument(
+        '-t',
+        '--ttl',
+        dest='ttl',
+        help="TTL of the snapshot (for aws-snapshot-cleaner)"
     )
     parser.add_argument(
         '-w',
@@ -170,19 +184,27 @@ def create_snapshot(volume, desc):
     return volume.create_snapshot(description=desc)
 
 
-def create_tags(snapshot, volume, dev, retain):
+def create_tags(snapshot, volume, dev, retain, ttl):
     logging.info("Creating tag Backup:Device=%s" % dev)
-    snapshot.add_tag('Backup:Device', value=dev)
+    if snapshot is not None:
+        snapshot.add_tag('Backup:Device', value=dev)
     if retain:
         logging.info("Creating tag Backup:Retain=%s" % retain)
-        snapshot.add_tag('Backup:Expires', value=retain)
+        if snapshot is not None:
+            snapshot.add_tag('Backup:Retain', value=retain)
+    if ttl:
+        logging.info("Creating tag Backup:TTL=%s" % ttl)
+        if snapshot is not None:
+            snapshot.add_tag('Backup:TTL', value=ttl)
     for n, v in volume.tags.items():
         if n.startswith('aws:'):
             logging.info("Creating tag Backup:%s=%s" % (n, v))
-            snapshot.add_tag('Backup:' + n, value=v)
+            if snapshot is not None:
+                snapshot.add_tag('Backup:' + n, value=v)
         else:
             logging.info("Creating tag %s=%s" % (n, v))
-            snapshot.add_tag(n, value=v)
+            if snapshot is not None:
+                snapshot.add_tag(n, value=v)
 
 
 def wait_for_snapshot(snapshot):
@@ -193,10 +215,14 @@ def wait_for_snapshot(snapshot):
 
 def run_snapshot(args, volume):
     name, volume_id, dev, desc = get_meta_data(volume, args.name)
-    snapshot = create_snapshot(volume, desc)
-    logging.info("%s" % repr(snapshot))
-    create_tags(snapshot, volume, dev, args.keep)
-    if args.wait:
+    if args.dry_run:
+        snapshot = None
+        logging.info("DRY RUN mode, shapshot desc %s" % desc)
+    else:
+        snapshot = create_snapshot(volume, desc)
+        logging.info("%s (%s)" % (repr(snapshot), desc))
+    create_tags(snapshot, volume, dev, args.keep, args.ttl)
+    if args.wait and not args.dry_run:
         wait_for_snapshot(snapshot)
 
 
