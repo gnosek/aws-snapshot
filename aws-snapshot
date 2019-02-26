@@ -6,14 +6,15 @@ import argparse
 import time, datetime, sys, logging, socket, re
 from dateutil.relativedelta import relativedelta
 
-def get_creds():
 
+def get_creds():
     # By default empty, boto will look for environment variables
     # AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
-    ACCESSKEY=None
-    SECRETKEY=None
+    ACCESSKEY = None
+    SECRETKEY = None
 
     return ACCESSKEY, SECRETKEY
+
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -21,7 +22,7 @@ def get_args():
         dest='subparser_name',
         help='sub-command help'
     )
-    parser_device  = subparsers.add_parser(
+    parser_device = subparsers.add_parser(
         'device',
         help='Snapshot a specific device'
     )
@@ -103,79 +104,91 @@ def get_args():
         '--log',
         dest='loglevel',
         default='ERROR',
-        choices=['CRITICAL','FATAL','ERROR','WARN','WARNING','INFO','DEBUG','NOTSET'],
+        choices=['CRITICAL', 'FATAL', 'ERROR', 'WARN', 'WARNING', 'INFO', 'DEBUG', 'NOTSET'],
         help="the loglevel sets the amount of output you want",
     )
     return parser.parse_args()
 
+
 def get_numeric_loglevel(loglevel):
     return getattr(logging, loglevel.upper())
 
+
 def convert_to_utf8(string):
-  return string.encode('utf8')
+    return string.encode('utf8')
+
 
 def get_conn(args):
     region = get_region(args)
     conn = boto.connect_ec2(args.accesskey, args.secretkey, region=region)
     return conn
 
+
 def get_region(args):
     import boto.ec2
-    regions = boto.ec2.regions(aws_access_key_id=args.accesskey,aws_secret_access_key=args.secretkey)
+    regions = boto.ec2.regions(aws_access_key_id=args.accesskey, aws_secret_access_key=args.secretkey)
     for region in regions:
         if args.region == region.name:
             return region
 
+
 def get_instance(conn, instanceid):
     return conn.get_all_instances(instanceid)[0].instances[0]
 
+
 def get_volume(conn, volumeid):
     return conn.get_all_volumes(volumeid)[0]
+
 
 def get_volumes_attached_to_instance(conn, instance):
     volumes = []
     block_devices = instance.block_device_mapping
 
     for dev, vol in block_devices.items():
-      # We don't care about root ebs devices
-      if not dev == '/dev/sda1':
-          volume = get_volume(conn, convert_to_utf8(vol.volume_id))
-          volumes.append(volume)
+        # We don't care about root ebs devices
+        if not dev == '/dev/sda1':
+            volume = get_volume(conn, convert_to_utf8(vol.volume_id))
+            volumes.append(volume)
 
     return volumes
 
+
 def get_meta_data(conn, volume, name):
-  dev = volume.attach_data.device
+    dev = volume.attach_data.device
 
-  if dev is None:
-    dev = 'Unattached'
+    if dev is None:
+        dev = 'Unattached'
 
-  desc = "%s-snap-%s-%s" % (name, volume.id, dev)
+    desc = "%s-snap-%s-%s" % (name, volume.id, dev)
 
-  return name, volume.id, dev, desc
+    return name, volume.id, dev, desc
+
 
 def create_snapshot(conn, volume, desc):
-  logging.info("Creating snapshot for %s with description %s" % (repr(volume), desc))
-  return volume.create_snapshot(description=desc)
+    logging.info("Creating snapshot for %s with description %s" % (repr(volume), desc))
+    return volume.create_snapshot(description=desc)
+
 
 def create_tags(conn, snapshot, volume, name, dev, retain):
-  logging.info("Creating tag Backup:Device=%s" % dev)
-  snapshot.add_tag('Backup:Device', value=dev)
-  if retain:
-      logging.info("Creating tag Backup:Retain=%s" % retain)
-      snapshot.add_tag('Backup:Expires', value=retain)
-  for n,v in volume.tags.items():
-    if n.startswith('aws:'):
-      logging.info("Creating tag Backup:%s=%s" % (n,v))
-      snapshot.add_tag('Backup:'+n, value=v)
-    else:
-      logging.info("Creating tag %s=%s" % (n,v))
-      snapshot.add_tag(n, value=v)
+    logging.info("Creating tag Backup:Device=%s" % dev)
+    snapshot.add_tag('Backup:Device', value=dev)
+    if retain:
+        logging.info("Creating tag Backup:Retain=%s" % retain)
+        snapshot.add_tag('Backup:Expires', value=retain)
+    for n, v in volume.tags.items():
+        if n.startswith('aws:'):
+            logging.info("Creating tag Backup:%s=%s" % (n, v))
+            snapshot.add_tag('Backup:' + n, value=v)
+        else:
+            logging.info("Creating tag %s=%s" % (n, v))
+            snapshot.add_tag(n, value=v)
+
 
 def wait_for_snapshot(snapshot):
-  while snapshot.status != 'completed':
-    snapshot.update()
-    time.sleep(1)
+    while snapshot.status != 'completed':
+        snapshot.update()
+        time.sleep(1)
+
 
 def run():
     (accesskey, secretkey) = get_creds()
@@ -187,39 +200,40 @@ def run():
     conn = get_conn(args)
 
     if args.subparser_name == 'instance':
-      instance = get_instance(conn, args.instanceid)
-      volumes = get_volumes_attached_to_instance(conn, instance)
-      for volume in volumes:
+        instance = get_instance(conn, args.instanceid)
+        volumes = get_volumes_attached_to_instance(conn, instance)
+        for volume in volumes:
+            name, id, dev, desc = get_meta_data(conn, volume, args.name)
+            snapshot = create_snapshot(conn, volume, desc)
+            logging.info("%s" % repr(snapshot))
+            create_tags(conn, snapshot, volume, name, dev, args.keep)
+            if args.wait: wait_for_snapshot(snapshot)
+
+    if args.subparser_name == 'device':
+        instance = get_instance(conn, args.instanceid)
+        try:
+            blk_dev = instance.block_device_mapping[args.device]
+            volume = get_volume(conn, convert_to_utf8(blk_dev.volume_id))
+        except KeyError:
+            logging.error("No volume attached to device %s on instance %s" % (args.device, args.instanceid))
+            sys.exit(1)
+
         name, id, dev, desc = get_meta_data(conn, volume, args.name)
         snapshot = create_snapshot(conn, volume, desc)
         logging.info("%s" % repr(snapshot))
         create_tags(conn, snapshot, volume, name, dev, args.keep)
         if args.wait: wait_for_snapshot(snapshot)
 
-    if args.subparser_name == 'device':
-      instance = get_instance(conn, args.instanceid)
-      try:
-        blk_dev = instance.block_device_mapping[args.device]
-        volume = get_volume(conn, convert_to_utf8(blk_dev.volume_id))
-      except KeyError:
-        logging.error("No volume attached to device %s on instance %s" % (args.device, args.instanceid))
-        sys.exit(1)
-
-      name, id, dev, desc = get_meta_data(conn, volume, args.name)
-      snapshot = create_snapshot(conn, volume, desc)
-      logging.info("%s" % repr(snapshot))
-      create_tags(conn, snapshot, volume, name, dev, args.keep)
-      if args.wait: wait_for_snapshot(snapshot)
-
     if args.subparser_name == 'volume':
-      volume = get_volume(conn, args.volumeid)
-      name, id, dev, desc = get_meta_data(conn, volume, args.name)
-      snapshot = create_snapshot(conn, volume, desc)
-      logging.info("%s" % repr(snapshot))
-      create_tags(conn, snapshot, volume, name, dev, args.keep)
-      if args.wait: wait_for_snapshot(snapshot)
+        volume = get_volume(conn, args.volumeid)
+        name, id, dev, desc = get_meta_data(conn, volume, args.name)
+        snapshot = create_snapshot(conn, volume, desc)
+        logging.info("%s" % repr(snapshot))
+        create_tags(conn, snapshot, volume, name, dev, args.keep)
+        if args.wait: wait_for_snapshot(snapshot)
 
     sys.exit()
+
 
 if __name__ == '__main__':
     run()
