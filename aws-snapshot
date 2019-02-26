@@ -1,19 +1,22 @@
 #!/usr/bin/env python
 # src: https://github.com/nbutler19/scripts/blob/master/python/snapshot-ebs.py
 
-import boto
 import argparse
-import time, datetime, sys, logging, socket, re
-from dateutil.relativedelta import relativedelta
+import logging
+import socket
+import sys
+import time
+
+import boto
 
 
 def get_creds():
     # By default empty, boto will look for environment variables
     # AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
-    ACCESSKEY = None
-    SECRETKEY = None
+    accesskey = None
+    secretkey = None
 
-    return ACCESSKEY, SECRETKEY
+    return accesskey, secretkey
 
 
 def get_args():
@@ -42,8 +45,7 @@ def get_args():
     )
     parser_instance = subparsers.add_parser(
         'instance',
-        help=
-        """
+        help="""
         Snapshot all attached ebs volumes on a specific instance
         """
     )
@@ -77,8 +79,7 @@ def get_args():
         '--name',
         dest='name',
         default=socket.gethostname(),
-        help=
-        """
+        help="""
         The name of the ebs volume or instance. Defaults to the current
         host.
         """
@@ -153,7 +154,7 @@ def get_volumes_attached_to_instance(conn, instance):
     return volumes
 
 
-def get_meta_data(conn, volume, name):
+def get_meta_data(volume, name):
     dev = volume.attach_data.device
 
     if dev is None:
@@ -164,12 +165,12 @@ def get_meta_data(conn, volume, name):
     return name, volume.id, dev, desc
 
 
-def create_snapshot(conn, volume, desc):
+def create_snapshot(volume, desc):
     logging.info("Creating snapshot for %s with description %s" % (repr(volume), desc))
     return volume.create_snapshot(description=desc)
 
 
-def create_tags(conn, snapshot, volume, name, dev, retain):
+def create_tags(snapshot, volume, dev, retain):
     logging.info("Creating tag Backup:Device=%s" % dev)
     snapshot.add_tag('Backup:Device', value=dev)
     if retain:
@@ -203,11 +204,12 @@ def run():
         instance = get_instance(conn, args.instanceid)
         volumes = get_volumes_attached_to_instance(conn, instance)
         for volume in volumes:
-            name, id, dev, desc = get_meta_data(conn, volume, args.name)
-            snapshot = create_snapshot(conn, volume, desc)
+            name, volume_id, dev, desc = get_meta_data(volume, args.name)
+            snapshot = create_snapshot(volume, desc)
             logging.info("%s" % repr(snapshot))
-            create_tags(conn, snapshot, volume, name, dev, args.keep)
-            if args.wait: wait_for_snapshot(snapshot)
+            create_tags(snapshot, volume, dev, args.keep)
+            if args.wait:
+                wait_for_snapshot(snapshot)
 
     if args.subparser_name == 'device':
         instance = get_instance(conn, args.instanceid)
@@ -218,19 +220,21 @@ def run():
             logging.error("No volume attached to device %s on instance %s" % (args.device, args.instanceid))
             sys.exit(1)
 
-        name, id, dev, desc = get_meta_data(conn, volume, args.name)
-        snapshot = create_snapshot(conn, volume, desc)
+        name, volume_id, dev, desc = get_meta_data(volume, args.name)
+        snapshot = create_snapshot(volume, desc)
         logging.info("%s" % repr(snapshot))
-        create_tags(conn, snapshot, volume, name, dev, args.keep)
-        if args.wait: wait_for_snapshot(snapshot)
+        create_tags(snapshot, volume, dev, args.keep)
+        if args.wait:
+            wait_for_snapshot(snapshot)
 
     if args.subparser_name == 'volume':
         volume = get_volume(conn, args.volumeid)
-        name, id, dev, desc = get_meta_data(conn, volume, args.name)
-        snapshot = create_snapshot(conn, volume, desc)
+        name, volume_id, dev, desc = get_meta_data(volume, args.name)
+        snapshot = create_snapshot(volume, desc)
         logging.info("%s" % repr(snapshot))
-        create_tags(conn, snapshot, volume, name, dev, args.keep)
-        if args.wait: wait_for_snapshot(snapshot)
+        create_tags(snapshot, volume, dev, args.keep)
+        if args.wait:
+            wait_for_snapshot(snapshot)
 
     sys.exit()
 
